@@ -2,9 +2,9 @@
 # IMPORTS
 # =============================================================================
 import math
-import torch
-import espaloma as esp
 
+import espaloma as esp
+import torch
 # =============================================================================
 # CONSTANTS
 # =============================================================================
@@ -58,6 +58,93 @@ def harmonic(x, k, eq, order=[2]):
         * ((x - eq)).pow(order[:, None, None]).permute(1, 2, 0).sum(dim=-1)
     )
 
+def cubic_expansion(x, k, eq, order=[2]):
+    """
+    Cubic expansion, eq (3) from Merck94
+    """
+    if isinstance(order, list):
+        order = torch.tensor(order, device=x.device)
+
+    
+    delta = ((x - eq))
+    delta_squared =((x - eq)).pow(order[:, None, None])
+    cb = -0.007
+    
+    out = k * delta_squared / 2 * (1 + cb * delta)
+    return out.permute(1, 2, 0).sum(dim=-1)
+
+
+def oop_expansion(x, k, order=[2]):
+    """
+    Cubic expansion, eq (3) from Merck94
+    """
+    if isinstance(order, list):
+        order = torch.tensor(order, device=x.device)
+
+
+    delta_squared = x.pow(order[:, None, None])
+    
+    out = k * delta_squared / 2
+    return out.permute(1, 2, 0).sum(dim=-1)
+
+
+
+
+def near_linear_expansion(x, k, eq, order=[2]):
+    """
+    Near-linear angles from eq (4) from Merck94. It's basically constant
+    """
+    if isinstance(order, list):
+        order = torch.tensor(order, device=x.device)
+
+    theta_cos = x.cos() # eq (4)
+    
+    out = k * (1 + theta_cos)
+    return out
+
+
+def quartic_expansion(x, k, eq, order=[2]):
+    """
+    Eq (2) MMFF94
+
+    Delta_r = x - eq
+    k force constant md/A
+    cs A
+
+    """
+    if isinstance(order, list):
+        order = torch.tensor(order, device=x.device)
+
+    
+    delta = ((x - eq))
+    delta_squared =((x - eq)).pow(order[:, None, None])
+    cs = -2
+    
+    out = k * delta_squared / 2 * (1 + cs * delta + 7/12 * cs**2 * delta_squared)
+    # 1 x N_atoms x 50
+    return out.permute(1, 2, 0).sum(dim=-1)
+
+
+def stretch_bend_expansion(x, k, eq, eq_ij, eq_kj, x_ij, x_kj, is_linear):
+    """
+    Eq (5) MMFF. Note that it's not applied when angle is near-linear
+    """
+
+    
+    delta_ij = ((x_ij - eq_ij))
+    delta_kj = ((x_kj - eq_kj))
+
+    delta_ijk = ((x - eq))
+    k_ijk = k[:, 0][:, None]
+    k_kji = k[:, 1][:, None]
+
+    
+    # Condition for eq4 to apply
+    #is_linear = torch.all((delta_ijk < torch.pi) * (delta_ijk > torch.pi/2), 1)[:, None].repeat(1, delta_ijk.shape[1])
+
+    out = ((k_ijk * delta_ij + k_kji * delta_kj) * delta_ijk) #.permute(1, 2, 0).sum(dim=-1)
+    
+    return torch.where(is_linear, torch.zeros_like(out), out)
 
 def periodic_fixed_phases(
     dihedrals: torch.Tensor, ks: torch.Tensor
@@ -145,7 +232,7 @@ def periodic(
             device=x.device,
             dtype=torch.get_default_dtype(),
         )
-
+    
     if periodicity.ndim == 1:
         periodicity = periodicity[None, None, :].repeat(
             x.shape[0], x.shape[1], 1
@@ -185,6 +272,36 @@ def periodic(
 
     return energy
 
+def periodic_mmff(
+    x, k, periodicity=list(range(1, 4))
+):
+    """
+    cos_n_theta_minus_phases multiplied by constants
+    MMFF94
+    """
+    if isinstance(periodicity, list):
+        periodicity = torch.tensor(
+            periodicity,
+            device=x.device,
+            dtype=torch.get_default_dtype(),
+        )
+    
+    if periodicity.ndim == 1:
+        periodicity = periodicity[None, None, :].repeat(
+            x.shape[0], x.shape[1], 1
+        )
+
+    elif periodicity.ndim == 2:
+        periodicity = periodicity[:, None, :].repeat(1, x.shape[1], 1)
+
+
+    n_theta = periodicity * x[:, :, None]
+    
+    cos_n_theta = n_theta.cos()
+    k = torch.nn.functional.relu(k[:, None, :].repeat(1, 1, x.shape[1]))
+
+    return k[:, :, 0] * (1 + cos_n_theta[:, :, 0]) + k[:, :, 1] * (1 - cos_n_theta[:, :, 1]) + k[:, :, 2] * (1 + cos_n_theta[:, :, 2])
+
 
 # simple implementation
 # def harmonic(x, k, eq):
@@ -198,7 +315,6 @@ def periodic(
 #     c = ((ka * a + kb * b) / (ka + kb)) ** 2 - a ** 2 - b ** 2
 #
 #     return ka * (x - a) ** 2 + kb * (x - b) ** 2
-
 
 def lj(
     x,

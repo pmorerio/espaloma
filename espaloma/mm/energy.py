@@ -1,9 +1,8 @@
 # =============================================================================
 # IMPORTS
 # =============================================================================
-import torch
-
 import espaloma as esp
+import torch
 
 
 # =============================================================================
@@ -21,6 +20,20 @@ def apply_bond(nodes, suffix=""):
         )
     }
 
+
+def apply_bond_mmff(nodes, suffix=""):
+    """Bond energy in nodes."""
+    # if suffix == '_ref':
+    return {
+        "u%s"
+        % suffix: esp.mm.bond.harmonic_bond_mmff( # change for MMFF
+            x=nodes.data["x"],
+            k=nodes.data["k%s" % suffix],
+            eq=nodes.data["eq%s" % suffix],
+        )
+    }
+
+
     # else:
     #     return {
     #         'u%s' % suffix: esp.mm.bond.harmonic_bond_re(
@@ -30,6 +43,25 @@ def apply_bond(nodes, suffix=""):
     #         )
     #     }
 
+def apply_stretch_bend(nodes, suffix):
+    """
+    TODO copy from contribution 2 and 3 into eq 5
+    """
+    
+    return {
+        "u%s"
+        % suffix: esp.mm.angle.harmonic_stretch_bend_mmff( # change for MMFF
+            x=nodes.data["x"],
+            eq=nodes.data['eq'],
+            k=nodes.data["kstretch"],
+            # Coming from n2
+            eq_ij=nodes.data['eq2_ij'],
+            eq_kj=nodes.data['eq2_kj'],
+            x_ij=nodes.data['x2_ij'],
+            x_kj=nodes.data['x2_kj'],
+            is_linear=nodes.data['lin']
+        )
+    }
 
 def apply_angle(nodes, suffix=""):
     """Angle energy in nodes."""
@@ -41,6 +73,21 @@ def apply_angle(nodes, suffix=""):
             eq=nodes.data["eq%s" % suffix],
         )
     }
+
+def apply_angle_mmff(nodes, suffix=""):
+
+    """Angle energy in nodes."""
+    return {
+        "u%s"
+        % suffix: esp.mm.angle.harmonic_angle_mmff(
+            x=nodes.data["x"],
+            k=nodes.data["k%s" % suffix],
+            eq=nodes.data["eq%s" % suffix],
+            lin=nodes.data["lin"]
+        )
+    }
+
+
 
 
 def apply_angle_ii(nodes, suffix=""):
@@ -145,7 +192,72 @@ def apply_torsion(nodes, suffix=""):
         }
 
 
+def apply_torsion(nodes, suffix=""):
+    """Torsion energy in nodes."""
+    return {
+        "u%s"
+        % suffix: esp.mm.torsion.periodic_torsion(
+            x=nodes.data["x"],
+            k=nodes.data["k%s" % suffix],
+        )
+    }
+
+def apply_torsion_mmff(nodes, suffix=""):
+    """Torsion energy in nodes."""
+    return {
+        "u%s"
+        % suffix: esp.mm.torsion.periodic_torsion_mmff(
+            x=nodes.data["x"],
+            k=nodes.data["k%s" % suffix],
+        )
+    }
+
+def apply_oop_mmff(nodes, suffix=""):
+    """Torsion energy in nodes."""
+    return {
+        "u%s"
+        % suffix: esp.mm.angle.oop_bend_mmff(
+            x=nodes.data["x"],
+            k=nodes.data["k%s" % suffix],
+        )
+    }
+
+
+
+
 def apply_improper_torsion(nodes, suffix=""):
+    """Improper torsion energy in nodes."""
+    if (
+        "phases%s" % suffix in nodes.data
+        and "periodicity%s" % suffix in nodes.data
+    ):
+        return {
+            "u%s"
+            % suffix: esp.mm.torsion.periodic_torsion(
+                x=nodes.data["x"],
+                k=nodes.data["k%s" % suffix],
+                phases=nodes.data["phases%s" % suffix],
+                periodicity=nodes.data["periodicity%s" % suffix],
+            )
+        }
+
+    else:
+        n_multi = nodes.data["k%s" % suffix].shape[-1]
+        periodicity=list(range(1, n_multi+1))
+        phases=[0.0 for _ in range(n_multi)]
+        
+        return {
+            "u%s"
+            % suffix: esp.mm.torsion.periodic_torsion(
+                x=nodes.data["x"],
+                k=nodes.data["k%s" % suffix],
+                phases=phases,
+                periodicity=periodicity,
+            )
+        }
+
+
+def apply_improper_torsion_mmff(nodes, suffix=""):
     """Improper torsion energy in nodes."""
     if (
         "phases%s" % suffix in nodes.data
@@ -393,6 +505,182 @@ def energy_in_graph(
     return g
 
 
+
+# =============================================================================
+# ENERGY IN GRAPH
+# =============================================================================
+def energy_in_graph_mmff(
+    g,
+    suffix="",
+    terms=["n2", "n3", "n4"],
+):  # "onefour", "nonbonded"]):
+    """Calculate the energy of a small molecule given parameters and geometry.
+
+    Parameters
+    ----------
+    g : `dgl.DGLHeteroGraph`
+        Input graph.
+
+    Returns
+    -------
+    g : `dgl.DGLHeteroGraph`
+        Output graph.
+
+    Notes
+    -----
+    This function modifies graphs in-place.
+
+    """
+    # TODO: this is all very restricted for now
+    # we need to make this better
+    import dgl
+
+    if "n2" in terms:
+        # apply energy function
+
+        # if "coefficients%s" % suffix in g.nodes["n2"].data:
+        #     g.apply_nodes(
+        #         lambda node: apply_bond_linear_mixture(
+        #             node, suffix=suffix, phases=[1.5, 6.0]
+        #         ),
+        #         ntype="n2",
+        #     )
+        # else:
+        g.apply_nodes(
+            lambda node: apply_bond_mmff(node, suffix=suffix),
+            ntype="n2",
+        )
+
+    if "n3" in terms:
+        # if "coefficients%s" % suffix in g.nodes["n3"].data:
+        #     import math
+
+        #     g.apply_nodes(
+        #         lambda node: apply_angle_linear_mixture(
+        #             node, suffix=suffix, phases=[0.0, math.pi]
+        #         ),
+        #         ntype="n3",
+        #     )
+        # else:
+        g.apply_nodes(
+            lambda node: apply_angle_mmff(node, suffix=suffix),
+            ntype="n3",
+        )
+
+        # copy n2 into n3
+        
+        ijk = g.nodes['n3'].data['idxs']
+        ij = ijk[:, :2]
+        
+
+
+        # Extract x and eq by indexing `g.nodes['n2']`
+        mask = torch.all(torch.eq(g.nodes['n2'].data['idxs'][:, None, :], ij), dim=-1)
+        ij_idx = torch.argmax(mask.int(), dim=0)
+        eq2_ij = g.nodes['n2'].data['eq'][ij_idx]
+        x_ij = g.nodes['n2'].data['x'][ij_idx]
+
+
+        kj = torch.roll(ijk, 1, 1)[:, :2]
+        mask = torch.all(torch.eq(g.nodes['n2'].data['idxs'][:, None, :], kj), dim=-1)      
+        kj_idx = torch.argmax(mask.int(), dim=0)
+        eq2_kj = g.nodes['n2'].data['eq'][kj_idx]
+        x_kj = g.nodes['n2'].data['x'][kj_idx]
+
+        g.nodes['n3'].data['eq2_ij'] = eq2_ij
+        g.nodes['n3'].data['eq2_kj'] = eq2_kj
+
+        g.nodes['n3'].data['x2_ij'] = x_ij
+        g.nodes['n3'].data['x2_kj'] = x_kj
+
+        g.apply_nodes(
+            lambda node: apply_stretch_bend(node, suffix=suffix),
+            ntype="n3",
+        )
+        
+    if g.number_of_nodes("n4") > 0 and "n4" in terms:
+        g.apply_nodes(
+            lambda node: apply_torsion_mmff(node, suffix=suffix),
+            ntype="n4",
+        )
+
+    
+    if g.number_of_nodes("n4_improper") > 0 and "n4_improper" in terms:
+        g.apply_nodes(
+            lambda node: apply_improper_torsion(node, suffix=suffix),
+            ntype="n4_improper",
+        )
+    
+    if g.number_of_nodes('n4_oop') > 0 and "n4_oop" in terms:
+        g.apply_nodes(
+            lambda node: apply_oop_mmff(node, suffix=suffix),
+            ntype="n4_oop",
+        )
+
+    if "nonbonded" in terms or "onefour" in terms:
+        esp.mm.nonbonded.multiply_charges(g)
+
+    if "nonbonded" in terms and g.number_of_nodes("nonbonded") > 0:
+        g.apply_nodes(
+            lambda node: apply_coulomb(
+                node,
+                suffix=suffix,
+                scaling=1.0,
+            ),
+            ntype="nonbonded",
+        )
+
+    if "onefour" in terms and g.number_of_nodes("onefour") > 0:
+        g.apply_nodes(
+            lambda node: apply_coulomb(
+                node,
+                suffix=suffix,
+                # scaling=0.5,
+                scaling=0.8333333333333334,
+            ),
+            ntype="onefour",
+        )
+
+    # sum up energy
+    # bonded
+    g.multi_update_all(
+        {
+            "%s_in_g"
+            % term: (
+                dgl.function.copy_u(u="u%s" % suffix, out="m_%s" % term),
+                dgl.function.sum(
+                    msg="m_%s" % term, out="u_%s%s" % (term, suffix)
+                ),
+            )
+            for term in terms
+            if "u%s" % suffix in g.nodes[term].data
+        },
+        cross_reducer="sum",
+    )
+
+    
+    g.apply_nodes(
+        lambda node: {
+            "u%s"
+            % suffix: sum(
+                node.data["u_%s%s" % (term, suffix)]
+                for term in terms
+                if "u_%s%s" % (term, suffix) in node.data
+            )
+        },
+        ntype="g",
+    )
+
+    
+    if "u0" in g.nodes["g"].data:
+        g.apply_nodes(
+            lambda node: {"u": node.data["u"] + node.data["u0"]},
+            ntype="g",
+        )
+    
+    return g
+
+
 def energy_in_graph_ii(
     g,
     suffix="",
@@ -439,6 +727,7 @@ class EnergyInGraph(torch.nn.Module):
         super(EnergyInGraph, self).__init__()
         self.args = args
         self.kwargs = kwargs
+        
 
     def forward(self, g):
         return energy_in_graph(g, *self.args, **self.kwargs)
@@ -454,9 +743,20 @@ class EnergyInGraphII(torch.nn.Module):
         return energy_in_graph_ii(g, *self.args, **self.kwargs)
 
 
+class EnergyInGraphMMFF(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        super(EnergyInGraphMMFF, self).__init__()
+        self.args = args
+        self.kwargs = kwargs
+
+    def forward(self, g):
+        return energy_in_graph_mmff(g, *self.args, **self.kwargs)
+
+
 class CarryII(torch.nn.Module):
     def forward(self, g):
         import math
+
         import dgl
 
         g.multi_update_all(
